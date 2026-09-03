@@ -1,15 +1,23 @@
+-- ══════════════════════════════════════════════════════════════
+--  SCRIPT COMPLETO: MAIN GUI + COMBAT + ADVANCED INVENTORY ESP
+-- ══════════════════════════════════════════════════════════════
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
 local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local Camera = workspace.CurrentCamera
 
--- TEMA ROJO MODERNO
+local MyName = LocalPlayer.Name
+local MyDisplayName = LocalPlayer.DisplayName
+
+-- CONFIGURACIÓN Y TEMA
 local THEME = {
 	BgMain = Color3.fromRGB(16, 12, 14),
 	BgCard = Color3.fromRGB(28, 18, 20),
@@ -24,19 +32,170 @@ local THEME = {
 	FontSub = Enum.Font.GothamMedium
 }
 
+local RarityColors = {
+	["Common"]    = Color3.fromRGB(200, 200, 200),
+	["Uncommon"]  = Color3.fromRGB(0, 255, 120),
+	["Rare"]      = Color3.fromRGB(0, 170, 255),
+	["Epic"]      = Color3.fromRGB(170, 0, 255),
+	["Legendary"] = Color3.fromRGB(255, 170, 0),
+	["Mythic"]    = Color3.fromRGB(255, 40, 80),
+	["Mythical"]  = Color3.fromRGB(255, 40, 80)
+}
+
 local UPDATE_DELAY = 0.033
 local IsInteractingWithSlider = false
 
--- SISTEMA DRAGGABLE
+-- ESTADOS DEL SCRIPT
+local PlayerESP = true
+local NameESP = true
+local HealthESP = true
+local WeaponESP = true
+local ExcludedPlayers = {}
+
+local hideLocalPlayer = true  
+local CAMBIAR_MI_NOMBRE_POR = "" -- Nombre falso (dejar vacío si solo deseas ocultarlo)
+
+-- REGISTRO DE ARMAS Y ESP DRAWINGS
+local WeaponRegistry = {}
+local InventoryDrawings = {}
+
+-- ══════════════════════════════════════════════════════════════
+--  SISTEMA DE PRIVACIDAD Y FILTRADO DE TEXTO
+-- ══════════════════════════════════════════════════════════════
+
+local function filtrarTexto(texto)
+	if not texto or texto == "" then return "" end
+	local resultado = string.gsub(texto, MyName, CAMBIAR_MI_NOMBRE_POR)
+	resultado = string.gsub(resultado, MyDisplayName, CAMBIAR_MI_NOMBRE_POR)
+	return resultado
+end
+
+local function procesarInstanciaTexto(instancia)
+	if instancia:IsA("TextLabel") or instancia:IsA("TextButton") or instancia:IsA("TextBox") then
+		if string.find(instancia.Text, MyName) or string.find(instancia.Text, MyDisplayName) then
+			instancia.Text = filtrarTexto(instancia.Text)
+		end
+		instancia:GetPropertyChangedSignal("Text"):Connect(function()
+			if string.find(instancia.Text, MyName) or string.find(instancia.Text, MyDisplayName) then
+				instancia.Text = filtrarTexto(instancia.Text)
+			end
+		end)
+	end
+end
+
+PlayerGui.DescendantAdded:Connect(procesarInstanciaTexto)
+for _, v in ipairs(PlayerGui:GetDescendants()) do procesarInstanciaTexto(v) end
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+	char.DescendantAdded:Connect(procesarInstanciaTexto)
+	for _, v in ipairs(char:GetDescendants()) do procesarInstanciaTexto(v) end
+end)
+
+if LocalPlayer.Character then
+	LocalPlayer.Character.DescendantAdded:Connect(procesarInstanciaTexto)
+	for _, v in ipairs(LocalPlayer.Character:GetDescendants()) do procesarInstanciaTexto(v) end
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  SISTEMA DE REGISTRO DE OBJETOS
+-- ══════════════════════════════════════════════════════════════
+
+local function registerItems(folder)
+	for _, tool in ipairs(folder:GetChildren()) do
+		if tool:IsA("Tool") then
+			local handle = tool:FindFirstChild("Handle")
+			local displayName = tool:GetAttribute("DisplayName") or tool.Name
+			local itemId = tool:GetAttribute("ItemId") or tool:GetAttribute("Id") or tool.Name
+			local rarity = tool:GetAttribute("RarityName") or "Common"
+			
+			local key
+			if handle then
+				local mesh = handle:FindFirstChildOfClass("SpecialMesh")
+				if mesh and mesh.MeshId ~= "" then
+					key = mesh.MeshId .. (mesh.TextureId or "") .. "_RARITY_" .. rarity
+				elseif handle:IsA("MeshPart") and handle.MeshId ~= "" then
+					key = handle.MeshId .. (handle.TextureID or "") .. "_RARITY_" .. rarity
+				end
+			end
+			
+			if not key then
+				key = (itemId and itemId ~= tool.Name) and ("ITEMID_" .. itemId .. "_RARITY_" .. rarity) or ("NAME_" .. displayName .. "_" .. tool.Name .. "_RARITY_" .. rarity)
+			end
+			
+			WeaponRegistry[key] = { Name = filtrarTexto(displayName), Rarity = rarity, ToolName = tool.Name }
+		end
+	end
+end
+
+local ItemsFolder = ReplicatedStorage:FindFirstChild("Items") or Workspace:FindFirstChild("Items")
+if ItemsFolder then
+	for _, folderName in ipairs({"gun", "melee", "throwable", "consumable", "farming", "misc", "rod", "fish"}) do
+		local folder = ItemsFolder:FindFirstChild(folderName)
+		if folder then registerItems(folder) end
+	end
+end
+
+local function getItemKey(tool)
+	local handle = tool:FindFirstChild("Handle")
+	local displayName = tool:GetAttribute("DisplayName") or tool.Name
+	local itemId = tool:GetAttribute("ItemId") or tool:GetAttribute("Id") or tool.Name
+	local rarity = tool:GetAttribute("RarityName") or "Common"
+	
+	if handle then
+		local mesh = handle:FindFirstChildOfClass("SpecialMesh")
+		if mesh and mesh.MeshId ~= "" then return mesh.MeshId .. (mesh.TextureId or "") .. "_RARITY_" .. rarity end
+		if handle:IsA("MeshPart") and handle.MeshId ~= "" then return handle.MeshId .. (handle.TextureID or "") .. "_RARITY_" .. rarity end
+	end
+	if itemId and itemId ~= "" and itemId ~= tool.Name then return "ITEMID_" .. itemId .. "_RARITY_" .. rarity end
+	return "NAME_" .. displayName .. "_" .. tool.Name .. "_RARITY_" .. rarity
+end
+
+local function getWeaponInfo(tool)
+	if not tool or not tool:IsA("Tool") then return nil end
+	local registered = WeaponRegistry[getItemKey(tool)]
+	if registered then return registered end
+
+	local displayName = tool:GetAttribute("DisplayName") or tool.Name
+	local rarity = tool:GetAttribute("RarityName") or "Common"
+	return { Name = filtrarTexto(displayName), Rarity = rarity, ToolName = tool.Name }
+end
+
+local function getPlayerTools(player)
+	local tools = {}
+	local char = player.Character
+	local foundRelevantTool = false
+	local searchAreas = {player:FindFirstChild("Backpack"), char}
+	
+	for _, bag in ipairs(searchAreas) do
+		if bag then
+			for _, t in ipairs(bag:GetChildren()) do
+				if t:IsA("Tool") and t.Name ~= "Fists" then 
+					local info = getWeaponInfo(t)
+					if info then
+						table.insert(tools, info)
+						foundRelevantTool = true
+					end
+				end
+			end
+		end
+	end
+	
+	if not foundRelevantTool then
+		return {{ Name = "Puños", Rarity = "Common" }}
+	end
+	return tools
+end
+
+-- ══════════════════════════════════════════════════════════════
+--  FUNCIONES ÚTILES
+-- ══════════════════════════════════════════════════════════════
+
 local function MakeFullyDraggable(guiObject)
 	local dragging = false
-	local dragInput = nil
-	local dragStart = nil
-	local startPos = nil
+	local dragInput, dragStart, startPos
 
 	guiObject.InputBegan:Connect(function(input)
 		if IsInteractingWithSlider then return end
-
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = true
 			dragStart = input.Position
@@ -69,7 +228,6 @@ local function MakeFullyDraggable(guiObject)
 	end)
 end
 
--- OPTIMIZACIÃ“N EXTREMA
 local function ApplyFullOptimization()
 	pcall(function()
 		settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
@@ -116,7 +274,10 @@ local function ApplyFullOptimization()
 	end)
 end
 
--- GUI PRINCIPAL
+-- ══════════════════════════════════════════════════════════════
+--  INTERFACE Y MENÚ PRINCIPAL
+-- ══════════════════════════════════════════════════════════════
+
 local function LoadFullGUI()
 	if PlayerGui:FindFirstChild("MainModernGUI") then
 		PlayerGui.MainModernGUI:Destroy()
@@ -138,7 +299,7 @@ local function LoadFullGUI()
 	Instance.new("UICorner", Menu).CornerRadius = UDim.new(0, 16)
 	MakeFullyDraggable(Menu)
 
-	-- HEADER Y TABS
+	-- HEADER & TABS
 	local Header = Instance.new("Frame")
 	Header.Size = UDim2.new(1, -20, 0, 45)
 	Header.Position = UDim2.new(0, 10, 0, 10)
@@ -181,7 +342,7 @@ local function LoadFullGUI()
 	local Close = Instance.new("TextButton")
 	Close.Size = UDim2.new(0, 32, 0, 32)
 	Close.Position = UDim2.new(1, -32, 0, 6)
-	Close.Text = "Ã—"
+	Close.Text = "×"
 	Close.Font = Enum.Font.Gotham
 	Close.TextSize = 22
 	Close.BackgroundColor3 = THEME.BgCard
@@ -226,11 +387,11 @@ local function LoadFullGUI()
 		AimFrame.CanvasSize = UDim2.new(0, 0, 0, AimLayout.AbsoluteContentSize.Y + 10)
 	end)
 
-	-- BOTÃ“N FLOTANTE
+	-- BOTÓN FLOTANTE
 	local Float = Instance.new("TextButton")
 	Float.Size = UDim2.new(0, 45, 0, 45)
 	Float.Position = UDim2.new(0, 20, 0.5, -22)
-	Float.Text = "â˜…"
+	Float.Text = "★"
 	Float.Font = THEME.Font
 	Float.TextSize = 20
 	Float.TextColor3 = THEME.AccentPrimary
@@ -258,7 +419,7 @@ local function LoadFullGUI()
 		TweenService:Create(VisualTab, TweenInfo.new(0.2), {BackgroundTransparency = 1, TextColor3 = THEME.TextDark}):Play()
 	end)
 
-	-- COMPONENTES
+	-- GENERADORES DE COMPONENTES
 	local function createToggle(text, parent, defaultState, callback)
 		local container = Instance.new("Frame")
 		container.Size = UDim2.new(1, -6, 0, 42)
@@ -399,49 +560,26 @@ local function LoadFullGUI()
 		return btn
 	end
 
-	-- CONTROLES DE LA INTERFAZ
-	local PlayerESP = true
-	local NameESP = true
-	local HealthESP = true
-	local WeaponESP = true
-	local ExcludedPlayers = {}
-	local AimKey = Enum.KeyCode.F
-
+	-- OPCIONES VISUALES
 	createToggle("Player ESP", VisualFrame, true, function(v) PlayerESP = v end)
 	createToggle("Show Name", VisualFrame, true, function(v) NameESP = v end)
 	createToggle("Show Health", VisualFrame, true, function(v) HealthESP = v end)
 	createToggle("Show Weapons", VisualFrame, true, function(v) WeaponESP = v end)
 
-	-- RAREZAS ORIGINALES
-	local RarityColors = {
-		Common = Color3.fromRGB(255, 255, 255),
-		Uncommon = Color3.fromRGB(0, 255, 120),
-		Rare = Color3.fromRGB(0, 170, 255),
-		Epic = Color3.fromRGB(170, 0, 255),
-		Legendary = Color3.fromRGB(255, 170, 0),
-		Mythic = Color3.fromRGB(255, 40, 80)
-	}
+	local CurrentTarget = nil
 
-	local function getWeapons(player)
-		local items = {}
-		pcall(function()
-			local function scan(container)
-				if not container then return end
-				for _,tool in ipairs(container:GetChildren()) do
-					if tool:IsA("Tool") and tool.Name ~= "Fists" then
-						local displayName = tool:GetAttribute("DisplayName") or tool.Name
-						local rarity = tool:GetAttribute("RarityName") or "Common"
-						table.insert(items, { Name = displayName, Rarity = rarity })
-					end
-				end
-			end
-			scan(player:FindFirstChild("Backpack"))
-			scan(player.Character)
-		end)
-		return items
+	-- ══════════════════════════════════════════════════════════════
+	--  LÓGICA ESP Y DRAWINGS (INTEGRADO CON EL SISTEMA AVANZADO)
+	-- ══════════════════════════════════════════════════════════════
+
+	local function clearInventoryDrawings(player)
+		if InventoryDrawings[player] then
+			for _, d in ipairs(InventoryDrawings[player].drawings) do d:Remove() end
+			InventoryDrawings[player] = nil
+		end
 	end
 
-	local CurrentTarget = nil
+	Players.PlayerRemoving:Connect(clearInventoryDrawings)
 
 	local function createESP(player)
 		if player == LocalPlayer then return end
@@ -459,17 +597,22 @@ local function LoadFullGUI()
 		local hp = Drawing.new("Text")
 		hp.Size = 12; hp.Outline = true
 
-		local weaponDrawings = {}
 		local last = 0
 
 		RunService.RenderStepped:Connect(function()
 			if tick() - last < UPDATE_DELAY then return end
 			last = tick()
 
+			if (player == LocalPlayer and hideLocalPlayer) then
+				clearInventoryDrawings(player)
+				highlight.Adornee = nil; name.Visible = false; hp.Visible = false
+				return
+			end
+
 			local char = player.Character
 			if not char then
 				highlight.Adornee = nil; name.Visible = false; hp.Visible = false
-				for _, draw in pairs(weaponDrawings) do draw.Visible = false end
+				clearInventoryDrawings(player)
 				return
 			end
 
@@ -479,7 +622,7 @@ local function LoadFullGUI()
 
 			if not head or not root or not humanoid then
 				highlight.Adornee = nil; name.Visible = false; hp.Visible = false
-				for _, draw in pairs(weaponDrawings) do draw.Visible = false end
+				clearInventoryDrawings(player)
 				return
 			end
 
@@ -494,7 +637,7 @@ local function LoadFullGUI()
 				elseif ExcludedPlayers[player.Name] then
 					highlight.FillTransparency = 1
 					highlight.OutlineColor = Color3.fromRGB(0, 255, 120)
-					name.Color = Color3.fromRGB(0, 255, 120) -- Nombre Verde Completo para Amigos
+					name.Color = Color3.fromRGB(0, 255, 120)
 				else
 					highlight.FillTransparency = 1
 					highlight.OutlineColor = Color3.fromRGB(255, 220, 0)
@@ -502,7 +645,7 @@ local function LoadFullGUI()
 				end
 			else
 				highlight.Adornee = nil; name.Visible = false; hp.Visible = false
-				for _, draw in pairs(weaponDrawings) do draw.Visible = false end
+				clearInventoryDrawings(player)
 				return
 			end
 
@@ -511,7 +654,7 @@ local function LoadFullGUI()
 
 			if not headVis or not rootVis or headPos.Z < 0 or rootPos.Z < 0 then
 				name.Visible = false; hp.Visible = false
-				for _, draw in pairs(weaponDrawings) do draw.Visible = false end
+				clearInventoryDrawings(player)
 				return
 			end
 
@@ -523,8 +666,12 @@ local function LoadFullGUI()
 			local anchorY = y - 12
 
 			if NameESP then
-				name.Text = player.Name; name.Position = Vector2.new(anchorX, anchorY); name.Visible = true
-			else name.Visible = false end
+				name.Text = filtrarTexto(player.Name)
+				name.Position = Vector2.new(anchorX, anchorY)
+				name.Visible = true
+			else 
+				name.Visible = false 
+			end
 
 			if HealthESP then
 				local percent = math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)
@@ -532,25 +679,51 @@ local function LoadFullGUI()
 				hp.Color = Color3.fromRGB(255 * (1 - percent), 255 * percent, 50)
 				hp.Position = Vector2.new(anchorX, anchorY + (NameESP and 14 or 0))
 				hp.Visible = true
-			else hp.Visible = false end
+			else 
+				hp.Visible = false 
+			end
 
+			-- ══════════════════════════════════════════════════════════════
+			--  ESP DE ARMAS E INVENTARIO (AHORA USA EL SCRIPT ULTRA OPTIMIZADO)
+			--  Mantiene exactamente la misma posición / altura / lugar del original
+			-- ══════════════════════════════════════════════════════════════
 			if WeaponESP then
-				local items = getWeapons(player)
-				for _, draw in pairs(weaponDrawings) do draw.Visible = false end
-				for i, w in ipairs(items) do
-					if not weaponDrawings[i] then
-						local txt = Drawing.new("Text")
-						txt.Size = 12; txt.Center = true; txt.Outline = true; txt.Font = 2
-						weaponDrawings[i] = txt
+				local infos = getPlayerTools(player)
+
+				if not InventoryDrawings[player] then InventoryDrawings[player] = { drawings = {} } end
+				local data = InventoryDrawings[player]
+
+				while #data.drawings < #infos do
+					local d = Drawing.new("Text")
+					d.Size = 13 
+					d.Center = false 
+					d.Outline = true 
+					d.Font = 2
+					d.Visible = false
+					table.insert(data.drawings, d)
+				end
+
+				for idx, d in ipairs(data.drawings) do
+					if infos[idx] then
+						local nombreArma = filtrarTexto(infos[idx].Name)
+						-- Formato del script ultra optimizado
+						d.Text = "[" .. nombreArma .. "]"
+						d.Color = RarityColors[infos[idx].Rarity] or Color3.new(1, 1, 1)
+						-- Posición y altura EXACTAMENTE igual que el original
+						d.Position = Vector2.new(x + width / 2 - 20, y + height + 6 + ((idx - 1) * 14))
+						d.Visible = true
+					else
+						d.Visible = false
 					end
-					local draw = weaponDrawings[i]
-					draw.Text = "[" .. w.Rarity .. "] " .. w.Name
-					draw.Color = RarityColors[w.Rarity] or Color3.new(1, 1, 1)
-					draw.Position = Vector2.new(x + width / 2, y + height + 6 + ((i - 1) * 12))
-					draw.Visible = true
+				end
+
+				if #data.drawings > #infos then
+					for i = #infos + 1, #data.drawings do
+						data.drawings[i].Visible = false
+					end
 				end
 			else
-				for _, draw in pairs(weaponDrawings) do draw.Visible = false end
+				clearInventoryDrawings(player)
 			end
 		end)
 	end
@@ -558,7 +731,10 @@ local function LoadFullGUI()
 	for _, p in ipairs(Players:GetPlayers()) do createESP(p) end
 	Players.PlayerAdded:Connect(function(p) task.wait(1); createESP(p) end)
 
-	-- AIMBOT
+	-- ══════════════════════════════════════════════════════════════
+	--  AIMBOT & COMBAT SYSTEM
+	-- ══════════════════════════════════════════════════════════════
+
 	local AimEnabled = false
 	local WallCheck = true
 	local ShowFOV = true
@@ -566,6 +742,7 @@ local function LoadFullGUI()
 	local TargetPart = "Head"
 	local AimParts = { "Head", "UpperTorso" }
 	local AimIndex = 1
+	local AimKey = Enum.KeyCode.F
 
 	local FOVCircle = Drawing.new("Circle")
 	FOVCircle.Visible = true
@@ -591,7 +768,7 @@ local function LoadFullGUI()
 		AimPartBtn.Text = "Target Part : " .. (TargetPart == "UpperTorso" and "CHEST" or "HEAD")
 	end)
 
-	-- SISTEMA FRIENDLIST (DESPLEGABLE Y TIEMPO REAL)
+	-- DESPLEGABLE FRIENDLIST
 	local FriendlistContainer = Instance.new("Frame")
 	FriendlistContainer.Size = UDim2.new(1, -6, 0, 42)
 	FriendlistContainer.BackgroundColor3 = THEME.BgCard
@@ -645,7 +822,7 @@ local function LoadFullGUI()
 				btn.Size = UDim2.new(1, -6, 0, 28)
 				btn.Font = THEME.FontSub
 				btn.TextSize = 12
-				btn.Text = "  " .. player.Name
+				btn.Text = "  " .. filtrarTexto(player.Name)
 				btn.TextXAlignment = Enum.TextXAlignment.Left
 				btn.BorderSizePixel = 0
 				btn.AutoButtonColor = false
@@ -741,7 +918,10 @@ local function LoadFullGUI()
 	end)
 end
 
--- SELECTOR INICIAL
+-- ══════════════════════════════════════════════════════════════
+--  SELECTOR INICIAL DE VERSIÓN
+-- ══════════════════════════════════════════════════════════════
+
 if PlayerGui:FindFirstChild("SelectorGUI") then
 	PlayerGui.SelectorGUI:Destroy()
 end
